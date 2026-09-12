@@ -66,6 +66,10 @@ jobs:
 
       - name: Ensure R2 bucket exists
         run: |
+          if ! grep -qE '^\s*"r2_buckets"' wrangler.jsonc; then
+            echo "No R2 bucket configured in wrangler.jsonc; photo storage stays in preview mode. Skipping."
+            exit 0
+          fi
           set +e
           out="$(npx wrangler r2 bucket create "$BUCKET" 2>&1)"; code=$?
           set -e
@@ -73,7 +77,11 @@ jobs:
           if [ $code -eq 0 ] || echo "$out" | grep -qi "already exists"; then
             echo "Bucket $BUCKET is ready"
           else
-            echo "::error::Could not create R2 bucket $BUCKET (does the API token have Workers R2 Storage: Edit?)"
+            if echo "$out" | grep -q "10042"; then
+              echo "::error::R2 is not enabled on this Cloudflare account yet. In the dashboard open R2 Object Storage, click Enable R2 (it asks for a payment method but the free tier costs nothing), then re-run this workflow."
+            else
+              echo "::error::Could not create R2 bucket $BUCKET. Check the API token has Workers R2 Storage: Edit."
+            fi
             exit 1
           fi
 

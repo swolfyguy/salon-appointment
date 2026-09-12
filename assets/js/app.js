@@ -34,6 +34,7 @@
   const API = C.api !== false;
   let online = false;      // true once the API has answered
   let BUSY = {};           // date -> barberId -> [[start, end, ref|null]]
+  let FEATURES = { media: false, ai: false, aiDemo: false };   // what the deployment can do, from the API
   async function api(path, opts) {
     const o = { method: 'GET', ...opts };
     if (o.body !== undefined) { o.body = JSON.stringify(o.body); o.headers = { 'content-type': 'application/json' }; }
@@ -53,7 +54,7 @@
     if (!API) return;
     try {
       const r = await api(`/api/availability?from=${TODAY}&to=${DAYS[DAYS.length - 1]}`);
-      BUSY = r.busy || {}; online = true;
+      BUSY = r.busy || {}; FEATURES = { ...FEATURES, ...(r.features || {}) }; online = true;
     } catch (e) {
       if (online) toast('Lost contact with the shop. Times may be out of date.');
       online = false;
@@ -193,7 +194,7 @@
       if (b && names) cards += `<button class="row" type="button" id="usual"><div class="av">↻</div>
         <div class="rowmain"><b>Book my usual</b><span>${esc(names)} with ${esc(first(b))} · ${lb.mins} min</span></div></button>`;
     }
-    if (AI) cards += `<button class="row" type="button" data-go="look"><div class="av ai">✦</div>
+    if (AI && (!online || FEATURES.ai)) cards += `<button class="row" type="button" data-go="look"><div class="av ai">✦</div>
       <div class="rowmain"><b>Not sure what to get?</b><span>Add a photo, get looks that suit you and the right barber</span></div></button>`;
     cards += `<a class="row" href="${mapsUrl()}" target="_blank" rel="noopener"><div class="av">📍</div>
       <div class="rowmain"><b>${esc(C.address.split(',')[0])}, ${esc(C.suburb)}</b><span>Tap for directions</span></div></a>`;

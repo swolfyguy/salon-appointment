@@ -64,6 +64,7 @@ globalThis.SALON_CONFIG = {
      perHour / perDay cap how often it can be called, so the cost can't run away. */
   ai: {
     enabled: true,
+    demo: true,      // no API key yet? show sample suggestions so the flow can be demonstrated
     maxPhotos: 3,
     perHour: 5,      // per visitor
     perDay: 150,     // whole shop

@@ -25,16 +25,18 @@
     }
   ],
 
-  // Photo and video storage. Create once with `npx wrangler r2 bucket create salon-media`.
-  "r2_buckets": [
-    { "binding": "MEDIA", "bucket_name": "salon-media" }
-  ],
+  // Photo and video storage is OFF: uploads preview in the browser and are not
+  // kept. To store them for real, enable R2 in the Cloudflare dashboard, then
+  // uncomment this block. The deploy workflow creates the bucket.
+  // "r2_buckets": [
+  //   { "binding": "MEDIA", "bucket_name": "salon-media" }
+  // ],
 
   // Non-secret settings. Override the AI model here if you want.
   "vars": { "AI_MODEL": "claude-opus-5" }
 
-  // Secrets (set with `npx wrangler secret put NAME`):
+  // Secrets (set with `npx wrangler secret put NAME` or as GitHub secrets):
   //   ADMIN_TOKEN        required for admin.html and /api/admin/*
-  //   ANTHROPIC_API_KEY  required for the AI look advisor
+  //   ANTHROPIC_API_KEY  turns the AI look advisor from sample answers into real ones
   //   NOTIFY_WEBHOOK     optional URL that receives every booking event as JSON
 }

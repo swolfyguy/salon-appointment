@@ -115,8 +115,14 @@ async function availability(env, url) {
   const now = shopNow();
   const from = url.searchParams.get('from') || now.date, to = url.searchParams.get('to') || addDays(now.date, C.daysAhead - 1);
   if (!isDate(from) || !isDate(to) || to < from || addDays(from, 60) < to) fail(400, 'Bad date range');
-  return json({ from, to, today: now.date, now: now.hour, busy: await busyMap(env, from, to) });
+  return json({ from, to, today: now.date, now: now.hour, busy: await busyMap(env, from, to), features: features(env) });
 }
+/* What this deployment can actually do. The page adapts to it. */
+const features = (env) => ({
+  media: !!env.MEDIA,
+  ai: !!(C.ai && C.ai.enabled) && (!!env.ANTHROPIC_API_KEY || !!(C.ai && C.ai.demo)),
+  aiDemo: !!(C.ai && C.ai.enabled && C.ai.demo) && !env.ANTHROPIC_API_KEY,
+});
 
 /* Overlap test for a candidate slot. Runs inside INSERT/UPDATE statements so two
    customers racing for the same slot can never both succeed. */
@@ -243,9 +249,40 @@ ${team}
 Never comment on attractiveness, age, ethnicity, weight or health. Do not identify the person. If the photos do not show hair clearly, say so in the analysis and work from the description.`;
 }
 const b64 = (buf) => { const bytes = new Uint8Array(buf); let s = ''; for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192)); return btoa(s); };
+/* Sample answer used when no API key is configured and config.ai.demo is on,
+   so the flow can be shown to a client. Picks barbers from the config and
+   reacts to a few keywords so it feels responsive. */
+function demoAdvice(description) {
+  const d = description.toLowerCase();
+  const fadeGuy = staff().find((b) => (b.skills || []).join(' ').includes('fade')) || staff()[0];
+  const scissorGuy = staff().find((b) => (b.skills || []).join(' ').includes('scissor')) || staff()[1] || staff()[0];
+  const beardGuy = staff().find((b) => (b.skills || []).join(' ').includes('beard')) || staff()[0];
+  const wantsBeard = /beard|shave|stubble/.test(d), wantsLong = /long|length|grow|push back|flow/.test(d), wantsShort = /short|buzz|tight|crop/.test(d);
+  const fade = svcById('fade') ? 'fade' : C.services[0].id, cut = svcById('cut') ? 'cut' : C.services[0].id, beard = svcById('beard') ? 'beard' : null;
+  const suggestions = [
+    { name: wantsShort ? 'High skin fade with a short textured crop' : 'Mid skin fade with textured crop',
+      description: `Skin on the sides blended up to a ${wantsShort ? '1.5' : '2'} around the parietal ridge, ${wantsShort ? '2 to 3 cm' : '5 to 6 cm'} on top point-cut for texture and pushed forward.`,
+      why: 'Your density on top carries texture well, and a clean fade keeps the sides tight between visits.',
+      serviceIds: [fade, ...(wantsBeard && beard ? [beard] : [])], barberIds: [fadeGuy.id], maintenance: 'Every 3 to 4 weeks. A pea of matte clay, worked in dry.' },
+    { name: wantsLong ? 'Scissor taper with length on top' : 'Classic taper with a side part',
+      description: `Scissor over comb on the sides for a softer taper, ${wantsLong ? 'length kept on top so it can be pushed back' : 'a clean side part with a little height at the front'}.`,
+      why: wantsLong ? 'Keeps the length you asked for while tidying the shape around the ears and neck.' : 'A softer outline that suits a straight growth pattern and grows out gracefully.',
+      serviceIds: [cut, ...(wantsBeard && beard ? [beard] : [])], barberIds: [scissorGuy.id, fadeGuy.id], maintenance: 'Every 5 to 6 weeks. Light pomade or nothing at all.' },
+  ];
+  if (wantsBeard && beard) suggestions.push({ name: 'Beard shape-up with a faded cheek line', description: 'Cheeks and neckline cleaned with a razor, sides of the beard faded into the haircut, length kept through the chin.', why: 'Ties the beard into whichever cut you pick and keeps it looking deliberate.', serviceIds: [beard], barberIds: [beardGuy.id], maintenance: 'Every 2 to 3 weeks for the lines.' });
+  return {
+    analysis: 'Sample analysis: medium-density straight hair with a slight wave at the fringe and a crown whorl that pushes hair forward. Shapes with tighter sides and weight kept on top tend to sit best.',
+    suggestions,
+    tellBarber: `${suggestions[0].name}, ${suggestions[0].description.split(',')[0].toLowerCase()}.`,
+  };
+}
 async function advice(req, env, ctx, b) {
   if (!C.ai || !C.ai.enabled) fail(404, 'Not found');
-  if (!env.ANTHROPIC_API_KEY) fail(503, 'The look advisor is not set up yet');
+  if (!env.ANTHROPIC_API_KEY) {
+    if (!C.ai.demo) fail(503, 'The look advisor is not set up yet');
+    await new Promise((r) => setTimeout(r, 1800));
+    return json({ advice: demoAdvice(String(b.description || '')), demo: true, photos: [] });
+  }
   const ip = req.headers.get('cf-connecting-ip') || 'unknown', now = Date.now();
   const [perIp, total] = await Promise.all([
     env.DB.prepare('SELECT COUNT(*) AS n FROM ai_calls WHERE ip = ? AND created_at > ?').bind(ip, now - 3600000).first('n'),
