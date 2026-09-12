@@ -3,7 +3,7 @@
    Everything a shop owner is likely to change lives in this one file.
    Edit the values, save, and reload. No build step needed.
    ===================================================================== */
-window.SALON_CONFIG = {
+globalThis.SALON_CONFIG = {
   name: "Faded Lines",
   suburb: "Bentleigh",
   tagline: "Sharp lines, Bentleigh.",
@@ -11,6 +11,11 @@ window.SALON_CONFIG = {
   address: "271 Centre Rd, Bentleigh VIC 3204",
   phone: "+61395570000",
   phoneDisplay: "(03) 9557 0000",
+
+  /* WhatsApp enquiries. International format, digits only, no + or spaces.
+     Leave empty to hide the WhatsApp buttons. */
+  whatsapp: "61412345678",
+  whatsappMessage: "Hi Faded Lines, I'd like to ask about ",
   locale: "en-AU",
   timezone: "Australia/Melbourne",
   refPrefix: "FL",
@@ -38,10 +43,31 @@ window.SALON_CONFIG = {
      container (see app.js, "PAYMENT") and add a server to create the SetupIntent. */
   paymentNote: "Nothing to pay now. Settle up in the chair by card or cash. Prices include GST.",
 
-  /* Optional: POST every confirmed booking as JSON to this URL (Formspree, Make,
-     Zapier, or your own endpoint). Leave empty to keep bookings on the customer's
-     device only. */
+  /* Backend. true = use the Worker API and D1 database (bookings shared across
+     all devices, no double-booking). false = static demo: bookings stay on the
+     customer's device and availability is simulated. If the API can't be
+     reached the page falls back to demo mode automatically. */
+  api: true,
+
+  /* Optional, demo mode only: POST every booking as JSON to this URL (Formspree,
+     Make, Zapier). In API mode set NOTIFY_WEBHOOK as a Worker secret instead. */
   bookingEndpoint: "",
+
+  /* Photos and videos (before and after). Stored in Cloudflare R2. */
+  media: {
+    maxImageMB: 10,
+    maxVideoMB: 40,
+    note: "Photos and videos are only used for your booking and are never shown publicly.",
+  },
+
+  /* AI look advisor. Needs the ANTHROPIC_API_KEY secret on the Worker.
+     perHour / perDay cap how often it can be called, so the cost can't run away. */
+  ai: {
+    enabled: true,
+    maxPhotos: 3,
+    perHour: 5,      // per visitor
+    perDay: 150,     // whole shop
+  },
 
   /* Photos. Unsplash IDs are resized on the fly. To use your own files, replace
      `id` with `src: "assets/img/your-photo.jpg"`. */
@@ -54,13 +80,25 @@ window.SALON_CONFIG = {
       { id: "1512690459411-b9245aed614b", alt: "A leather barber chair" },
       { id: "1536520002442-39764a41e987", alt: "A long row of chairs under pendant lights" },
     ],
+    /* Before-and-after pairs shown on the home screen with a drag-to-compare
+       slider. Add as many as you like. These are placeholder stock photos:
+       replace them with your own shots of the same client. */
+    beforeAfter: [
+      { caption: "Grown-out to skin fade", before: { id: "1519345182560-3f2917c472ef", alt: "Before: long grown-out hair" }, after: { id: "1583864697784-a0efc8379f70", alt: "After: tidy skin fade" } },
+      { caption: "Beard shape-up", before: { id: "1517832606299-7ae9b720a186", alt: "Before: untrimmed beard" }, after: { id: "1618077360395-f3068be8e001", alt: "After: shaped beard" } },
+      { caption: "Classic taper", before: { id: "1493256338651-d82f7acb2b38", alt: "Before: mid-cut" }, after: { id: "1593702275687-f8b402bf1fb5", alt: "After: finished taper" } },
+    ],
   },
 
-  /* Staff. base = starting price for a haircut. daysOff = weekdays off (0 = Sunday). */
+  /* Staff. base = starting price for a haircut. daysOff = weekdays off (0 = Sunday).
+     skills feed the AI advisor so it can match a look to the right barber. */
   barbers: [
-    { id: "dom",   name: "Dom",   initials: "D", note: "Skin fades, tapers",         base: 70, daysOff: [],  photo: { id: "1583864697784-a0efc8379f70", alt: "Dom" } },
-    { id: "marco", name: "Marco", initials: "M", note: "Classic cuts, scissor work", base: 55, daysOff: [0], photo: { id: "1618077360395-f3068be8e001", alt: "Marco" } },
-    { id: "sami",  name: "Sami",  initials: "S", note: "Beards, hot towel shaves",   base: 45, daysOff: [6], photo: { id: "1567894340315-735d7c361db0", alt: "Sami" } },
+    { id: "dom",   name: "Dom",   initials: "D", note: "Skin fades, tapers",         base: 70, daysOff: [],  photo: { id: "1583864697784-a0efc8379f70", alt: "Dom" },
+      skills: ["skin fades", "drop and burst fades", "tapers", "sharp line-ups", "textured crops", "curly and afro hair"] },
+    { id: "marco", name: "Marco", initials: "M", note: "Classic cuts, scissor work", base: 55, daysOff: [0], photo: { id: "1618077360395-f3068be8e001", alt: "Marco" },
+      skills: ["scissor cuts", "classic side parts", "pompadours and quiffs", "longer styles", "fine or thinning hair", "kids"] },
+    { id: "sami",  name: "Sami",  initials: "S", note: "Beards, hot towel shaves",   base: 45, daysOff: [6], photo: { id: "1567894340315-735d7c361db0", alt: "Sami" },
+      skills: ["beard shaping", "hot towel straight-razor shaves", "beard fades", "low and mid fades", "buzz cuts"] },
     { id: "any",   name: "Any barber", initials: "★", note: "Whoever's free soonest", base: 45, any: true },
   ],
 

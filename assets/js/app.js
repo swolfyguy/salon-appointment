@@ -1,7 +1,12 @@
-/* Faded Lines booking app. Configuration lives in config.js. */
+/* Faded Lines booking app. Configuration lives in config.js.
+   Runs in two modes:
+     API mode  (config.api = true and /api reachable): availability and bookings
+               come from the Worker + D1, shared across every device.
+     Demo mode (config.api = false, or the API is unreachable): availability is
+               simulated and bookings live in this browser only. */
 (function () {
   'use strict';
-  const C = window.SALON_CONFIG;
+  const C = globalThis.SALON_CONFIG;
   if (!C) { document.body.textContent = 'Missing assets/js/config.js'; return; }
 
   const $ = (id) => document.getElementById(id);
@@ -22,8 +27,39 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode: keep going in memory */ } },
   };
   const KEY_B = 'salon.bookings', KEY_C = 'salon.customer';
-  let bookings = store.get(KEY_B, []);
+  let bookings = store.get(KEY_B, []);   // this device's bookings (the full record in demo mode, a cached copy in API mode)
   const saveBookings = () => store.set(KEY_B, bookings);
+
+  /* ---------- API ---------- */
+  const API = C.api !== false;
+  let online = false;      // true once the API has answered
+  let BUSY = {};           // date -> barberId -> [[start, end, ref|null]]
+  async function api(path, opts) {
+    const o = { method: 'GET', ...opts };
+    if (o.body !== undefined) { o.body = JSON.stringify(o.body); o.headers = { 'content-type': 'application/json' }; }
+    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 10000);
+    try {
+      const r = await fetch(path, { ...o, signal: ctl.signal });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { const e = new Error(data.error || `Request failed (${r.status})`); e.status = r.status; throw e; }
+      return data;
+    } catch (e) {
+      if (e.name === 'AbortError') throw Object.assign(new Error('The shop is taking too long to answer. Try again.'), { status: 0 });
+      if (!e.status) e.status = 0;
+      throw e;
+    } finally { clearTimeout(tm); }
+  }
+  async function loadAvailability() {
+    if (!API) return;
+    try {
+      const r = await api(`/api/availability?from=${TODAY}&to=${DAYS[DAYS.length - 1]}`);
+      BUSY = r.busy || {}; online = true;
+    } catch (e) {
+      if (online) toast('Lost contact with the shop. Times may be out of date.');
+      online = false;
+    }
+    draw();
+  }
 
   /* ---------- dates & hours ---------- */
   const dkey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -43,16 +79,18 @@
   const barberById = (id) => C.barbers.find((b) => b.id === id);
   const svcById = (id) => C.services.find((s) => s.id === id);
   const worksOn = (b, k) => !(b.daysOff || []).includes(fromKey(k).getDay());
-  const price = (s, b) => Math.round((b.base * s.mult) / 5) * 5;
+  const priceWith = (s, b) => Math.round((b.base * s.mult) / 5) * 5;
+  const price = (s, b) => b.any ? Math.min(...staff().map((x) => priceWith(s, x))) : priceWith(s, b);   // "Any barber" quotes the lowest rate
+  const money = (n, b) => (b && b.any ? 'from ' : '') + '$' + n;
   const first = (b) => b.name.split(' ')[0];
 
   /* ---------- availability ----------
-     Demo availability is deterministic per barber per day, plus whatever this
-     device has already booked. Replace busyBlocks() with a call to your booking
-     backend when you have one. */
+     API mode: BUSY comes from the server. Demo mode: deterministic busy blocks
+     per barber per day plus whatever this device has booked. */
   const hash = (str) => { let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
   const rng = (seed) => () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
   function busyBlocks(b, k) {
+    if (online) return ((BUSY[k] || {})[b.id] || []).filter((x) => !S.editing || x[2] !== S.editing).map((x) => [x[0], x[1]]);
     const h = hoursFor(fromKey(k)); if (!h) return [];
     const r = rng(hash(b.id + k)), n = 2 + Math.floor(r() * 3), out = [];
     for (let i = 0; i < n; i++) {
@@ -94,9 +132,11 @@
   const waitEstimate = () => { const busy = staff().filter(busyNow).length; return busy >= staff().length ? 45 : 5 + busy * 15; };
 
   /* ---------- state ---------- */
-  const S = { barber: null, svc: [], date: TODAY, time: null, editing: null, last: null };
+  const S = { barber: null, svc: [], date: TODAY, time: null, editing: null, last: null, look: null };
   let scr = 'home';
-  const PROG = { home: 0, bookings: 0, barber: 25, services: 50, time: 75, details: 92, done: 100 };
+  let LOOK = null;         // last AI advice shown on the look screen
+  const PROG = { home: 0, bookings: 0, look: 10, barber: 25, services: 50, time: 75, details: 92, done: 100 };
+  const AI = !!(C.ai && C.ai.enabled);
   const total = () => (S.barber ? S.svc.reduce((t, s) => t + price(s, S.barber), 0) : 0);
   const mins = () => S.svc.reduce((t, s) => t + s.mins, 0);
 
@@ -104,6 +144,7 @@
   const sortByWhen = (a, b) => a.date === b.date ? a.time - b.time : a.date < b.date ? -1 : 1;
   const nextBooking = () => bookings.filter(upcoming).sort(sortByWhen)[0] || null;
   const lastBooking = () => bookings.filter((b) => b.status !== 'cancelled').sort((a, b) => b.createdAt - a.createdAt)[0] || null;
+  function remember(b) { const i = bookings.findIndex((x) => x.ref === b.ref); i >= 0 ? (bookings[i] = b) : bookings.push(b); saveBookings(); }
 
   /* ---------- navigation ---------- */
   function go(name) {
@@ -119,6 +160,10 @@
   function toast(msg, ms) {
     const t = $('toast'); t.textContent = msg; t.classList.add('on');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), ms || 3200);
+  }
+  function busyButton(on, label) {
+    const btn = document.querySelector('#cta .cta'); if (!btn) return;
+    btn.disabled = on; btn.classList.toggle('busy', on); if (label) btn.textContent = label;
   }
 
   /* ---------- home ---------- */
@@ -148,16 +193,155 @@
       if (b && names) cards += `<button class="row" type="button" id="usual"><div class="av">↻</div>
         <div class="rowmain"><b>Book my usual</b><span>${esc(names)} with ${esc(first(b))} · ${lb.mins} min</span></div></button>`;
     }
+    if (AI) cards += `<button class="row" type="button" data-go="look"><div class="av ai">✦</div>
+      <div class="rowmain"><b>Not sure what to get?</b><span>Add a photo, get looks that suit you and the right barber</span></div></button>`;
     cards += `<a class="row" href="${mapsUrl()}" target="_blank" rel="noopener"><div class="av">📍</div>
       <div class="rowmain"><b>${esc(C.address.split(',')[0])}, ${esc(C.suburb)}</b><span>Tap for directions</span></div></a>`;
+    cards += waRow('Got a question?');
     if (bookings.length) cards += `<button class="txt" type="button" data-go="bookings">My bookings</button>`;
     $('home-cards').innerHTML = cards;
 
     $('gallery').innerHTML = (C.images.gallery || []).map((p) => `<figure>${imgTag(p, 400, 300)}</figure>`).join('');
+    const pairs = C.images.beforeAfter || [];
+    $('ba-wrap').hidden = !pairs.length;
+    $('ba').innerHTML = pairs.map((p, i) => `<figure>
+      <div class="cmp">
+        ${imgTag(p.before, 600, 450, 'before')}${imgTag(p.after, 600, 450, 'after')}
+        <span class="tagl b">Before</span><span class="tagl a">After</span>
+        <div class="line"></div><div class="knob">‹›</div>
+        <input type="range" min="0" max="100" value="50" aria-label="Compare before and after${p.caption ? ': ' + esc(p.caption) : ''}">
+      </div>
+      ${p.caption ? `<figcaption>${esc(p.caption)}</figcaption>` : ''}</figure>`).join('');
     $('home-foot').innerHTML = footer();
+    $('rail-foot').innerHTML = footer();
   }
-  const footer = () => `<b>${esc(C.address)}</b>${esc(C.hoursText)}<br><a href="tel:${esc(C.phone)}">${esc(C.phoneDisplay)}</a>`;
+  const modeNote = () => API && !online ? `<br><span class="muted">Demo mode: live availability unavailable, bookings stay on this device.</span>` : '';
+  const footer = () => `<b>${esc(C.address)}</b>${esc(C.hoursText)}<br><a href="tel:${esc(C.phone)}">${esc(C.phoneDisplay)}</a>${waUrl() ? ` · <a href="${waUrl()}" target="_blank" rel="noopener">WhatsApp</a>` : ''}${modeNote()}`;
   const mapsUrl = () => `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(C.name + ', ' + C.address)}`;
+  /* WhatsApp click-to-chat. Works on phones with the app and on desktop via WhatsApp Web. */
+  const waUrl = (msg) => { const n = String(C.whatsapp || '').replace(/\D/g, ''); return n ? `https://wa.me/${n}?text=${encodeURIComponent(msg || C.whatsappMessage || '')}` : ''; };
+  const WA_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2zm0 1.8a8.2 8.2 0 1 1-4.2 15.3l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 0 1 12 3.8zm-3.2 4.4c-.2 0-.5 0-.7.3-.3.3-1 1-1 2.4s1 2.8 1.2 3c.1.2 2 3.2 5 4.4 2.5 1 3 .8 3.5.7.5 0 1.7-.7 1.9-1.4.2-.7.2-1.2.2-1.4-.1-.1-.3-.2-.6-.3l-2-1c-.3-.1-.5-.1-.7.2l-.9 1.1c-.2.2-.3.2-.6.1a6.7 6.7 0 0 1-3.4-3c-.3-.4 0-.5.1-.7l.5-.6.3-.5c.1-.2 0-.4 0-.5l-.9-2.2c-.2-.5-.4-.5-.6-.5h-.6z"/></svg>';
+  const waRow = (title, msg) => waUrl() ? `<a class="row" href="${waUrl(msg)}" target="_blank" rel="noopener"><div class="av wa">${WA_ICON}</div>
+      <div class="rowmain"><b>${esc(title)}</b><span>Chat with us on WhatsApp</span></div></a>` : '';
+
+  /* ---------- photos & video ----------
+     Uploader state is keyed by purpose: "before" (the booking being made),
+     "before:REF" / "after:REF" (an existing booking). Each key holds the
+     uploaded media {id, url, contentType}. */
+  const UP = {};
+  const up = (key) => UP[key] || (UP[key] = { items: [], busy: false });
+  const isVideo = (m) => (m.contentType || '').startsWith('video/');
+  const thumb = (m, rm) => `<div class="th">${isVideo(m)
+    ? `<video src="${esc(m.url)}#t=0.5" muted playsinline preload="metadata"></video><span class="play">▶</span>`
+    : `<img src="${esc(m.url)}" alt="" loading="lazy">`}${rm ? `<button type="button" class="rm" data-rm="${esc(rm)}" aria-label="Remove">×</button>` : ''}</div>`;
+  function drawUploader(key) {
+    document.querySelectorAll(`[data-uploader="${key}"]`).forEach((el) => {
+      if (!online) { el.innerHTML = `<p class="note">Photo upload needs the live booking service, which is unavailable right now.</p>`; return; }
+      const u = up(key), attached = key.includes(':');
+      el.innerHTML = `<div class="thumbs">${u.items.map((m, i) => thumb(m, attached ? '' : `${key}:${i}`)).join('')}
+        <label class="th add ${u.busy ? 'busy' : ''}"><input type="file" accept="image/*,video/*" multiple hidden data-files="${esc(key)}" ${u.busy ? 'disabled' : ''}>
+          <span>${u.busy ? '<span class="spin"></span>Uploading' : '+ Photo or video'}</span></label></div>`;
+    });
+  }
+  async function shrinkImage(file) {
+    let bmp;
+    try { bmp = await createImageBitmap(file); } catch (e) { throw new Error("That image format isn't supported here. Try a JPG or PNG."); }
+    const max = 1024, s = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height); if (bmp.close) bmp.close();
+    return new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
+  }
+  async function videoFrames(file, n) {
+    const url = URL.createObjectURL(file), v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.preload = 'auto'; v.src = url;
+    await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error("Couldn't read that video. Try an MP4 or MOV.")); });
+    const c = document.createElement('canvas'), s = Math.min(1, 1024 / Math.max(v.videoWidth, v.videoHeight));
+    c.width = Math.round(v.videoWidth * s); c.height = Math.round(v.videoHeight * s);
+    const out = [], dur = Number.isFinite(v.duration) ? v.duration : 4;
+    for (let i = 0; i < n; i++) {
+      v.currentTime = Math.max(0, Math.min(dur * (i / n) + 0.15, dur - 0.05));
+      await new Promise((r) => { v.onseeked = r; });
+      c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+      out.push(await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85)));
+    }
+    URL.revokeObjectURL(url);
+    return out.filter(Boolean);
+  }
+  async function uploadBlob(blob, kind) {
+    const r = await fetch(`/api/uploads?kind=${kind}`, { method: 'POST', headers: { 'content-type': blob.type }, body: blob });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'Upload failed');
+    return d;
+  }
+  async function addFiles(key, files) {
+    const u = up(key), [kind, ref] = key.split(':');
+    u.busy = true; drawUploader(key);
+    try {
+      for (const f of files) {
+        const added = [];
+        if (f.type.startsWith('video/')) {
+          if (f.size > C.media.maxVideoMB * 1048576) throw new Error(`Videos must be under ${C.media.maxVideoMB} MB`);
+          for (const b of await videoFrames(f, 4)) added.push({ ...(await uploadBlob(b, kind)), fromVideo: true });
+          added.push(await uploadBlob(f, kind));
+        } else if (f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name)) {
+          added.push(await uploadBlob(await shrinkImage(f), kind));
+        } else throw new Error('Choose a photo or a video.');
+        u.items.push(...added);
+        if (ref) {   // existing booking: attach straight away
+          const r = await api(`/api/bookings/${encodeURIComponent(ref)}/media`, { method: 'POST', body: { kind, ids: added.map((m) => m.id) } });
+          remember(r.booking);
+        }
+      }
+    } catch (e) { toast(e.message, 5000); }
+    u.busy = false; drawUploader(key);
+  }
+  const attachedMedia = (b) => (b.beforeMedia || []).length || (b.afterMedia || []).length
+    ? `<div class="media-row">${[['beforeMedia', 'Before'], ['afterMedia', 'After']].map(([k, label]) => (b[k] || []).length
+        ? `<div><small>${label}</small><div class="thumbs sm">${b[k].map((m) => thumb(m)).join('')}</div></div>` : '').join('')}</div>` : '';
+
+  /* ---------- AI look advisor ---------- */
+  function drawLook() {
+    drawUploader('before');
+    $('look-privacy').textContent = C.media.note;
+    if (LOOK) drawAdvice(); else if (!online) $('look-result').innerHTML = `<p class="empty">The advisor needs the live booking service, which is unavailable right now.</p>`;
+  }
+  async function getAdvice() {
+    const photos = up('before').items.filter((m) => !isVideo(m)).map((m) => m.id).slice(0, C.ai.maxPhotos);
+    const description = $('look-desc').value.trim();
+    if (!photos.length && description.length < 10) { toast('Add a photo of your hair, or describe the look you want.'); return; }
+    busyButton(true, 'Looking at your hair…');
+    $('look-result').innerHTML = `<p class="empty"><span class="spin"></span>Working out what suits you. This takes about half a minute.</p>`;
+    try {
+      const r = await api('/api/advice', { method: 'POST', body: { photoIds: photos, description } });
+      LOOK = { ...r.advice, description }; drawAdvice();
+    } catch (e) { $('look-result').innerHTML = ''; toast(e.message, 6000); }
+    busyButton(false, 'Get suggestions');
+  }
+  function drawAdvice() {
+    const a = LOOK;
+    $('look-result').innerHTML = `<div class="card"><p class="eyebrow">What we see</p><p class="advice">${esc(a.analysis)}</p></div>
+      <p class="lbl">Looks that would suit you</p>
+      ${a.suggestions.map((s, i) => {
+        const svcs = s.serviceIds.map(svcById).filter(Boolean), bs = s.barberIds.map(barberById).filter((b) => b && !b.any);
+        const m = svcs.reduce((t, x) => t + x.mins, 0);
+        return `<div class="card sug"><b>${esc(s.name)}</b><p>${esc(s.description)}</p><p class="why">${esc(s.why)}</p>
+          ${s.maintenance ? `<p>${esc(s.maintenance)}</p>` : ''}
+          ${svcs.length ? `<div class="rc" style="margin-top:8px"><span>${esc(svcs.map((x) => x.name).join(' + '))}</span><b>${m} min</b></div>` : ''}
+          ${bs.length && svcs.length ? bs.map((b) => `<button class="row" type="button" data-book="${i}:${esc(b.id)}">
+            <div class="av">${esc(b.initials)}${b.photo ? imgTag(b.photo, 120, 120, '', true) : ''}</div>
+            <div class="rowmain"><b>Book with ${esc(b.name)}</b><span>${esc(b.note)}</span></div>
+            <div class="price">$${svcs.reduce((t, x) => t + price(x, b), 0)}</div></button>`).join('')
+          : `<p class="note">Ask for this in the chair, or <button class="txt" type="button" data-go="barber" style="display:inline;width:auto;padding:0">pick a barber</button>.</p>`}
+        </div>`; }).join('')}
+      ${a.tellBarber ? `<div class="card"><p class="eyebrow">Tell your barber</p><p class="advice">“${esc(a.tellBarber)}”</p></div>` : ''}
+      <p class="note">Suggestions come from an AI looking at your photos and your description. Your barber has the final say in the chair.</p>`;
+  }
+  function bookSuggestion(i, barberId) {
+    const s = LOOK.suggestions[i]; if (!s) return;
+    S.barber = barberById(barberId); S.svc = s.serviceIds.map(svcById).filter(Boolean); S.time = null; S.editing = null;
+    S.look = { description: LOOK.description, advice: `${s.name}. ${s.description}` };
+    go('time');
+  }
 
   /* ---------- step 1: barber ---------- */
   function drawBarbers() {
@@ -181,7 +365,7 @@
         <div class="tick"></div>
         <div class="thumb">${imgTag(s.photo, 160, 160)}</div>
         <div class="rowmain"><b>${esc(s.name)}</b><span>${esc(s.desc)} · ${s.mins} min</span></div>
-        <div class="price">$${price(s, S.barber)}</div></button>`).join('');
+        <div class="price">${money(price(s, S.barber), S.barber)}</div></button>`).join('');
   }
   function pickService(id) {
     const s = svcById(id);
@@ -204,11 +388,11 @@
     if (!slotsFor(S.barber, S.date, need).length) { const k = DAYS.find((x) => slotsFor(S.barber, x, need).length); if (k) { S.date = k; S.time = null; } }
     const shown = DAYS.slice(0, window.innerWidth >= 900 ? 8 : DAYS.length);
     $('dates').innerHTML = shown.map((k) => {
-      const d = fromKey(k), shut = !hoursFor(d) || !slotsFor(S.barber, k, mins() / 60).length;
+      const d = fromKey(k), shut = !hoursFor(d) || !slotsFor(S.barber, k, need).length;
       return `<button class="chip ${S.date === k ? 'sel' : ''}" type="button" role="tab" aria-selected="${S.date === k}" ${shut ? 'disabled' : ''} data-date="${k}">
         <small>${k === TODAY ? 'Today' : d.toLocaleDateString(C.locale, { weekday: 'short' })}</small><b>${d.getDate()}</b></button>`;
     }).join('');
-    const list = slotsFor(S.barber, S.date, mins() / 60);
+    const list = slotsFor(S.barber, S.date, need);
     $('times').innerHTML = list.length
       ? ['Morning', 'Afternoon', 'Evening'].map((part) => {
           const g = list.filter((t) => part === 'Morning' ? t < 12 : part === 'Afternoon' ? t >= 12 && t < 17 : t >= 17);
@@ -224,14 +408,16 @@
     const who = barberById(b.barberId);
     return `<div class="rc"><span>When</span><b>${esc(longDate(b.date))}, ${fmt(b.time)}</b></div>
       <div class="rc"><span>Barber</span><b>${esc(who ? who.name : '')}</b></div>
-      ${b.services.map((id) => { const s = svcById(id); return s ? `<div class="rc"><span>${esc(s.name)}</span><b>$${price(s, who)}</b></div>` : ''; }).join('')}
-      <div class="rc"><span>Total · ${b.mins} min</span><b>$${b.total}</b></div>
+      ${b.services.map((id) => { const s = svcById(id); return s ? `<div class="rc"><span>${esc(s.name)}</span><b>${money(price(s, who), who)}</b></div>` : ''; }).join('')}
+      <div class="rc"><span>Total · ${b.mins} min</span><b>${money(b.total, who)}</b></div>
       ${b.ref ? `<div class="rc ref"><span>Reference</span><b>${esc(b.ref)}</b></div>` : ''}`;
   }
+  /* What we intend to book. In API mode the server assigns "Any barber" and prices it. */
   const draft = () => ({
-    barberId: S.barber.any ? assign(S.date, S.time, mins() / 60).id : S.barber.id,
-    requestedAny: !!S.barber.any, services: S.svc.map((s) => s.id), date: S.date, time: S.time, mins: mins(),
-    total: S.barber.any ? null : total(),
+    barberId: S.barber.any && !online ? assign(S.date, S.time, mins() / 60).id : S.barber.id,
+    requestedAny: !!S.barber.any, services: S.svc.map((s) => s.id), date: S.date, time: S.time, mins: mins(), total: total(),
+    beforeMedia: up('before').items.map((m) => m.id),
+    lookRequest: S.look ? S.look.description : '', aiAdvice: S.look ? S.look.advice : '',
   });
   function priced(b) { const who = barberById(b.barberId); b.total = b.services.reduce((t, id) => t + price(svcById(id), who), 0); return b; }
 
@@ -240,9 +426,9 @@
     if (!S.barber || scr === 'home' || scr === 'bookings' || scr === 'done') { el.innerHTML = ''; return; }
     el.innerHTML = `<h3>Your booking so far</h3>
       <div class="rc"><span>Barber</span><b>${esc(S.barber.name)}</b></div>
-      ${S.svc.map((s) => `<div class="rc"><span>${esc(s.name)}</span><b>$${price(s, S.barber)}</b></div>`).join('')}
+      ${S.svc.map((s) => `<div class="rc"><span>${esc(s.name)}</span><b>${money(price(s, S.barber), S.barber)}</b></div>`).join('')}
       ${S.time ? `<div class="rc"><span>When</span><b>${esc(shortDate(S.date))}, ${fmt(S.time)}</b></div>` : ''}
-      ${S.svc.length ? `<div class="rc"><span>Total · ${mins()} min</span><b>$${total()}</b></div>` : ''}`;
+      ${S.svc.length ? `<div class="rc"><span>Total · ${mins()} min</span><b>${money(total(), S.barber)}</b></div>` : ''}`;
   }
 
   /* ---------- step 4: details & confirm ---------- */
@@ -262,37 +448,53 @@
     return ok;
   }
   const newRef = () => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', a = new Uint8Array(5);
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', a = new Uint8Array(6);
     (window.crypto || {}).getRandomValues ? crypto.getRandomValues(a) : a.forEach((_, i) => (a[i] = Math.random() * 256));
     return C.refPrefix + '-' + Array.from(a, (n) => chars[n % chars.length]).join('');
   };
+  /* Demo-mode webhook. In API mode the Worker notifies instead. */
   async function send(b) {
-    if (!C.bookingEndpoint) return true;
-    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 8000);
-    try {
-      const r = await fetch(C.bookingEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b), signal: ctl.signal });
-      return r.ok;
-    } catch (e) { return false; } finally { clearTimeout(tm); }
+    if (online || !C.bookingEndpoint) return true;
+    try { const r = await fetch(C.bookingEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) }); return r.ok; }
+    catch (e) { return false; }
+  }
+  function apiFailed(e) {
+    toast(e.message, 5000);
+    if (e.status === 409) { loadAvailability(); go('time'); }
   }
   async function confirmBooking() {
     if (!validate()) return;
-    if (!freeAt(barberById(draft().barberId), S.date, S.time, mins() / 60)) { toast('That time was just taken. Pick another.'); go('time'); return; }
-    const btn = document.querySelector('#cta .cta'); btn.disabled = true; btn.classList.add('busy'); btn.textContent = 'Confirming…';
     const customer = { name: $('nm').value.trim(), phone: $('ph').value.trim(), email: $('em').value.trim() };
+    const notes = $('nt').value.trim();
     store.set(KEY_C, customer);
-    const b = priced({ ...draft(), ref: newRef(), status: 'confirmed', createdAt: Date.now(), notes: $('nt').value.trim(), ...customer, shop: C.name });
-    const sent = await send({ event: 'booking.created', ...b });
-    bookings.push(b); saveBookings();
-    S.last = b; S.editing = null;
-    if (!sent) toast(`Saved on this device, but we couldn't reach the shop. Please call ${C.phoneDisplay} to confirm.`, 6000);
+    busyButton(true, 'Confirming…');
+    let b;
+    if (online) {
+      try { b = (await api('/api/bookings', { method: 'POST', body: { ...draft(), ...customer, notes } })).booking; }
+      catch (e) { busyButton(false, 'Confirm booking'); apiFailed(e); return; }
+      loadAvailability();
+    } else {
+      const d = draft();
+      if (!freeAt(barberById(d.barberId), S.date, S.time, mins() / 60)) { busyButton(false, 'Confirm booking'); toast('That time was just taken. Pick another.'); go('time'); return; }
+      b = priced({ ...d, beforeMedia: [], afterMedia: [], ref: newRef(), status: 'confirmed', createdAt: Date.now(), notes, ...customer });
+      if (!(await send({ event: 'booking.created', shop: C.name, ...b }))) toast(`Saved on this device, but we couldn't reach the shop. Please call ${C.phoneDisplay} to confirm.`, 6000);
+    }
+    remember(b); S.last = b; S.editing = null;
     go('done');
   }
   async function commitReschedule() {
     const b = bookings.find((x) => x.ref === S.editing); if (!b) return;
-    const d = draft(); b.date = d.date; b.time = d.time; b.barberId = d.barberId; priced(b); b.updatedAt = Date.now();
-    saveBookings(); S.last = b; S.editing = null; S.last.moved = true;
-    const sent = await send({ event: 'booking.rescheduled', ...b });
-    if (!sent) toast(`Moved on this device, but we couldn't reach the shop. Please call ${C.phoneDisplay} to confirm.`, 6000);
+    busyButton(true, 'Moving…');
+    if (online) {
+      let nb;
+      try { nb = (await api(`/api/bookings/${encodeURIComponent(b.ref)}`, { method: 'PATCH', body: { date: S.date, time: S.time } })).booking; }
+      catch (e) { busyButton(false, 'Confirm new time'); apiFailed(e); return; }
+      Object.assign(b, nb); loadAvailability();
+    } else {
+      const d = draft(); b.date = d.date; b.time = d.time; b.barberId = d.barberId; priced(b); b.updatedAt = Date.now();
+      if (!(await send({ event: 'booking.rescheduled', shop: C.name, ...b }))) toast(`Moved on this device, but we couldn't reach the shop. Please call ${C.phoneDisplay} to confirm.`, 6000);
+    }
+    saveBookings(); S.last = b; S.editing = null; b.moved = true;
     go('done');
   }
 
@@ -302,10 +504,11 @@
     const who = barberById(b.barberId);
     $('h-done').textContent = b.moved ? 'Moved' : "Chair's yours";
     $('doneline').textContent = `${longDate(b.date)} at ${fmt(b.time)} with ${who.name}. ` + (b.email ? `We've noted ${b.email} for your confirmation.` : '');
-    $('done-body').innerHTML = `<div class="card">${lines(b)}</div>
+    $('done-body').innerHTML = `<div class="card">${lines(b)}${attachedMedia(b)}${b.aiAdvice ? `<p class="note">Your barber will see the look you chose: ${esc(b.aiAdvice.split('. ')[0])}.</p>` : ''}</div>
       <button class="row" type="button" id="ics"><div class="av">📅</div><div class="rowmain"><b>Add to calendar</b><span>Apple, Outlook and others · reminder the night before</span></div></button>
       <a class="row" href="${gcalUrl(b)}" target="_blank" rel="noopener"><div class="av">G</div><div class="rowmain"><b>Add to Google Calendar</b><span>Opens in a new tab</span></div></a>
       <a class="row" href="${mapsUrl()}" target="_blank" rel="noopener"><div class="av">📍</div><div class="rowmain"><b>Get directions</b><span>${esc(C.address)}</span></div></a>
+      ${waRow('Running late or need to ask something?', `Hi ${C.name}, about my booking ${b.ref} on ${shortDate(b.date)} at ${fmt(b.time)}: `)}
       <button class="txt" type="button" data-go="bookings">Reschedule or cancel</button>`;
     delete b.moved;
   }
@@ -329,16 +532,33 @@
 
   /* ---------- my bookings ---------- */
   function drawBookings() {
-    const up = bookings.filter(upcoming).sort(sortByWhen), rest = bookings.filter((b) => !upcoming(b)).sort(sortByWhen).reverse();
+    const upList = bookings.filter(upcoming).sort(sortByWhen), rest = bookings.filter((b) => !upcoming(b)).sort(sortByWhen).reverse();
+    const started = (b) => b.date < TODAY || (b.date === TODAY && b.time <= nowH());
     const card = (b, past) => {
-      const who = barberById(b.barberId);
+      const who = barberById(b.barberId), live = b.status === 'confirmed';
+      const key = `${started(b) ? 'after' : 'before'}:${b.ref}`;
+      if (live && online) { const u = up(key); u.items = b[started(b) ? 'afterMedia' : 'beforeMedia'] || []; }
       return `<div class="card bk ${past ? 'past' : ''}"><div class="when">${esc(shortDate(b.date))}, ${fmt(b.time)}${b.status === 'cancelled' ? '<span class="tag off">Cancelled</span>' : past ? '<span class="tag">Past</span>' : ''}</div>
         <div class="meta">${esc(b.services.map((id) => (svcById(id) || {}).name).filter(Boolean).join(' + '))} with ${esc(who ? who.name : '')} · $${b.total} · ${b.mins} min<br>Ref ${esc(b.ref)}</div>
+        ${live && started(b) && (b.beforeMedia || []).length ? `<div class="media-row"><div><small>Before</small><div class="thumbs sm">${b.beforeMedia.map((m) => thumb(m)).join('')}</div></div></div>` : ''}
+        ${live && online ? `<p class="lbl" style="margin-top:12px">${started(b) ? 'Your after photos' : 'Your hair now'} <span class="hint">${started(b) ? 'show off the result' : 'helps the barber plan'}</span></p><div data-uploader="${key}"></div>` : attachedMedia(b)}
         ${past ? '' : `<div class="bk-actions"><button class="btn2" type="button" data-move="${esc(b.ref)}">Reschedule</button><button class="btn2 danger" type="button" data-cancel="${esc(b.ref)}">Cancel</button></div>`}</div>`;
     };
-    $('bookings').innerHTML = (up.length ? up.map((b) => card(b, false)).join('') : `<p class="empty">No upcoming bookings on this device.</p>`)
+    $('bookings').innerHTML = (upList.length ? upList.map((b) => card(b, false)).join('') : `<p class="empty">No upcoming bookings on this device.</p>`)
       + (rest.length ? `<p class="lbl">Earlier</p>` + rest.map((b) => card(b, true)).join('') : '')
       + `<p class="note">Free cancellation up to ${C.cancelHours} hours before. Inside that window, call the shop on <a href="tel:${esc(C.phone)}">${esc(C.phoneDisplay)}</a>.</p>`;
+    bookings.forEach((b) => { if (b.status === 'confirmed') drawUploader(`${started(b) ? 'after' : 'before'}:${b.ref}`); });
+  }
+  /* API mode: refresh this device's upcoming bookings from the server, in case the shop changed them. */
+  async function syncBookings() {
+    if (!online) return;
+    const up = bookings.filter(upcoming); if (!up.length) return;
+    let changed = false;
+    await Promise.all(up.map(async (b) => {
+      try { const r = await api(`/api/bookings/${encodeURIComponent(b.ref)}`); if (JSON.stringify(r.booking) !== JSON.stringify(b)) { Object.assign(b, r.booking); changed = true; } }
+      catch (e) { if (e.status === 404) { b.status = 'cancelled'; changed = true; } }
+    }));
+    if (changed) { saveBookings(); if (scr === 'bookings') drawBookings(); if (scr === 'home') drawHome(); }
   }
   function startReschedule(ref) {
     const b = bookings.find((x) => x.ref === ref); if (!b) return;
@@ -350,17 +570,24 @@
     const hoursAway = (fromKey(b.date).getTime() + b.time * 3600000 - Date.now()) / 3600000;
     const msg = hoursAway < C.cancelHours ? `This is inside the ${C.cancelHours}-hour window. Cancel anyway?` : `Cancel your ${shortDate(b.date)} ${fmt(b.time)} booking?`;
     if (!window.confirm(msg)) return;
-    b.status = 'cancelled'; b.cancelledAt = Date.now(); saveBookings();
-    const sent = await send({ event: 'booking.cancelled', ...b });
-    toast(sent ? 'Booking cancelled.' : `Cancelled on this device. Please also call ${C.phoneDisplay}.`, sent ? 3000 : 6000);
+    if (online) {
+      try { Object.assign(b, (await api(`/api/bookings/${encodeURIComponent(b.ref)}`, { method: 'DELETE' })).booking); }
+      catch (e) { toast(e.message, 5000); return; }
+      saveBookings(); toast('Booking cancelled.'); loadAvailability();
+    } else {
+      b.status = 'cancelled'; b.cancelledAt = Date.now(); saveBookings();
+      const sent = await send({ event: 'booking.cancelled', shop: C.name, ...b });
+      toast(sent ? 'Booking cancelled.' : `Cancelled on this device. Please also call ${C.phoneDisplay}.`, sent ? 3000 : 6000);
+    }
     drawBookings();
   }
 
   /* ---------- bottom bar ---------- */
   function bar() {
     const b = $('cta');
-    const sum = (t) => `<div class="sum"><span>${t}</span><b>$${total()} · ${mins()} min</b></div>`;
+    const sum = (t) => `<div class="sum"><span>${t}</span><b>${money(total(), S.barber)} · ${mins()} min</b></div>`;
     if (scr === 'home') b.innerHTML = `<button class="cta" type="button" data-go="barber">Book an appointment</button>`;
+    else if (scr === 'look') b.innerHTML = `<button class="cta" type="button" id="advise" ${online ? '' : 'disabled'}>${online ? 'Get suggestions' : 'Advisor unavailable'}</button>`;
     else if (scr === 'barber') b.innerHTML = `<button class="cta" type="button" ${S.barber ? '' : 'disabled'} data-go="services">${S.barber ? 'Continue with ' + esc(first(S.barber)) : 'Pick a barber'}</button>`;
     else if (scr === 'services') b.innerHTML = (S.svc.length ? sum(S.svc.length + ' selected') : '') + `<button class="cta" type="button" ${S.svc.length ? '' : 'disabled'} data-go="time">${S.svc.length ? 'Pick a time' : 'Choose a service'}</button>`;
     else if (scr === 'time') b.innerHTML = sum(S.time ? fmt(S.time) : 'No time picked') + (S.editing
@@ -376,19 +603,23 @@
     if (scr === 'barber') drawBarbers();
     if (scr === 'services') drawServices();
     if (scr === 'time') drawTime();
-    if (scr === 'details') { $('receipt').innerHTML = lines(priced({ ...draft() })); $('pay-note').textContent = C.paymentNote; }
+    if (scr === 'look') drawLook();
+    if (scr === 'details') { $('receipt').innerHTML = lines({ ...draft() }); $('pay-note').textContent = C.paymentNote; $('details-photos').hidden = !online; drawUploader('before'); }
     if (scr === 'done') drawDone();
-    if (scr === 'bookings') drawBookings();
+    if (scr === 'bookings') { drawBookings(); syncBookings(); }
     bar(); live();
   }
-  function reset() { S.barber = null; S.svc = []; S.date = TODAY; S.time = null; S.editing = null; go('home'); }
+  function reset() { S.barber = null; S.svc = []; S.date = TODAY; S.time = null; S.editing = null; S.look = null; LOOK = null; up('before').items = []; if ($('look-desc')) $('look-desc').value = ''; go('home'); }
 
   /* ---------- events (delegated) ---------- */
   document.addEventListener('click', (e) => {
-    const el = e.target.closest('[data-go],[data-barber],[data-svc],[data-date],[data-time],[data-move],[data-cancel],#usual,#move,#finish,#ics');
+    const el = e.target.closest('[data-go],[data-barber],[data-svc],[data-date],[data-time],[data-move],[data-cancel],[data-rm],[data-book],#usual,#move,#finish,#ics,#advise');
     if (!el) return;
     const d = el.dataset;
     if (d.go) { if (d.go === 'home') reset(); else go(d.go); }
+    else if (d.rm) { const i = d.rm.lastIndexOf(':'); up(d.rm.slice(0, i)).items.splice(Number(d.rm.slice(i + 1)), 1); drawUploader(d.rm.slice(0, i)); }
+    else if (d.book) { const i = d.book.indexOf(':'); bookSuggestion(Number(d.book.slice(0, i)), d.book.slice(i + 1)); }
+    else if (el.id === 'advise') getAdvice();
     else if (d.barber) pickBarber(d.barber);
     else if (d.svc) pickService(d.svc);
     else if (d.date) pickDate(d.date);
@@ -399,6 +630,13 @@
     else if (el.id === 'move') commitReschedule();
     else if (el.id === 'finish') reset();
     else if (el.id === 'ics') downloadIcs(S.last);
+  });
+  document.addEventListener('input', (e) => {
+    const r = e.target.closest('.cmp input[type=range]'); if (r) r.parentElement.style.setProperty('--x', r.value + '%');
+  });
+  document.addEventListener('change', (e) => {
+    const f = e.target.closest('input[data-files]'); if (!f || !f.files.length) return;
+    const files = [...f.files]; f.value = ''; addFiles(f.dataset.files, files);
   });
   $('form').addEventListener('submit', (e) => { e.preventDefault(); confirmBooking(); });
   ['nm', 'ph', 'em'].forEach((id) => $(id).addEventListener('input', () => { $(id).setAttribute('aria-invalid', 'false'); $('e-' + id).classList.remove('on'); }));
@@ -419,5 +657,7 @@
   const rail = $('rail-bg'); rail.src = src(C.images.rail, 1200, 1600); rail.onerror = () => rail.classList.add('broken');
   const cust = store.get(KEY_C, null); if (cust) { $('nm').value = cust.name || ''; $('ph').value = cust.phone || ''; $('em').value = cust.email || ''; }
   setInterval(() => { if (scr === 'home') drawHome(); }, 60000);
+  setInterval(loadAvailability, 90000);
   draw();
+  loadAvailability().then(syncBookings);
 })();

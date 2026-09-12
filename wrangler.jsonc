@@ -1,10 +1,40 @@
 {
-  // Cloudflare Workers with static assets. Free tier. Deploy with `npm run deploy`.
+  // Cloudflare Workers + static assets + D1 + R2. Free tier. Deploy with `npm run deploy`.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "salon-appointment",
+  "main": "worker/index.js",
   "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Static files. Only /api/* reaches the Worker; everything else is served directly.
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
-  }
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // Database. Create it once with `npx wrangler d1 create salon-appointment`
+  // and paste the printed database_id below, then run `npm run db:init`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "salon-appointment",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+
+  // Photo and video storage. Create once with `npx wrangler r2 bucket create salon-media`.
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "salon-media" }
+  ],
+
+  // Non-secret settings. Override the AI model here if you want.
+  "vars": { "AI_MODEL": "claude-opus-5" }
+
+  // Secrets (set with `npx wrangler secret put NAME`):
+  //   ADMIN_TOKEN        required for admin.html and /api/admin/*
+  //   ANTHROPIC_API_KEY  required for the AI look advisor
+  //   NOTIFY_WEBHOOK     optional URL that receives every booking event as JSON
 }

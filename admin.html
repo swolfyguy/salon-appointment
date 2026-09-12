@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Faded Lines — Owner</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/styles.css">
+<style>
+  #app{max-width:720px;padding-bottom:40px}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:20px 20px 6px}
+  .top h1{font-size:24px}
+  .ctl{display:flex;gap:8px;align-items:center;padding:8px 20px 0}
+  .ctl input[type=date]{flex:1;min-height:44px}
+  .ctl .btn2{flex:0 0 auto;padding:0 14px}
+  .ap{display:flex;gap:12px;align-items:flex-start}
+  .ap .t{font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:17px;min-width:76px;letter-spacing:-.02em}
+  .ap .who{flex:1}
+  .ap .who b{font-weight:500;display:block}
+  .ap .who span{color:var(--bone-dim);font-size:13px;display:block;margin-top:2px;line-height:1.5}
+  .ap.off{opacity:.45}
+  .blk{border-style:dashed}
+  form.add{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+  form.add .wide{grid-column:1/-1}
+  select{width:100%;min-height:52px;background:#120F0B;border:1px solid var(--edge);border-radius:13px;padding:0 15px;color:var(--bone);font:inherit;font-size:16px}
+  .day-sum{color:var(--bone-dim);font-size:13.5px;padding:6px 20px 0}
+  .ap{flex-wrap:wrap}
+  .ap .extra{flex-basis:100%;margin-top:4px}
+  .look{background:rgba(139,108,240,.12);border:1px solid #5B3FC4;border-radius:10px;padding:8px 10px;font-size:13px;line-height:1.5;margin-top:8px}
+  .look b{color:#C9B6FF;font-weight:500}
+  .th.add input{display:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="top"><h1>Owner view</h1><button class="btn2" type="button" id="logout" hidden>Sign out</button></div>
+
+  <section id="login" class="pad">
+    <div class="card">
+      <label for="tok">Admin token</label>
+      <input id="tok" type="password" autocomplete="current-password" placeholder="Paste the ADMIN_TOKEN secret">
+      <p class="note">This is the value set with <code>wrangler secret put ADMIN_TOKEN</code>. It stays in this browser tab only.</p>
+      <div class="bk-actions"><button class="btn2" type="button" id="signin">Open</button></div>
+      <p class="err" id="e-tok">That token was rejected</p>
+    </div>
+  </section>
+
+  <section id="panel" hidden>
+    <div class="ctl">
+      <button class="btn2" type="button" id="prev" aria-label="Previous day">←</button>
+      <input type="date" id="date">
+      <button class="btn2" type="button" id="next" aria-label="Next day">→</button>
+      <button class="btn2" type="button" id="reload">Refresh</button>
+    </div>
+    <p class="day-sum" id="sum"></p>
+    <div class="pad" id="list"></div>
+    <div class="pad">
+      <p class="lbl">Block out time</p>
+      <div class="card">
+        <form class="add" id="blockform">
+          <div><label for="b-who">Barber</label><select id="b-who"></select></div>
+          <div><label for="b-reason">Reason <span class="opt">optional</span></label><input id="b-reason" maxlength="80" placeholder="Lunch, training…"></div>
+          <div><label for="b-start">From</label><input id="b-start" type="time" step="900" required></div>
+          <div><label for="b-end">To</label><input id="b-end" type="time" step="900" required></div>
+          <div class="wide bk-actions"><button class="btn2" type="submit">Add block</button></div>
+        </form>
+      </div>
+    </div>
+  </section>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="assets/js/config.js"></script>
+<script>
+(function () {
+  const C = globalThis.SALON_CONFIG, $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const pad = (n) => String(n).padStart(2, '0');
+  const fmt = (h) => { const H = Math.floor(h), m = Math.round((h - H) * 60); return `${(H % 12) || 12}:${pad(m)}${H < 12 ? 'am' : 'pm'}`; };
+  const toHours = (v) => { const [h, m] = v.split(':').map(Number); return h + m / 60; };
+  const byId = (id) => C.barbers.find((b) => b.id === id) || { name: id };
+  const svc = (id) => (C.services.find((s) => s.id === id) || { name: id }).name;
+  let token = sessionStorage.getItem('salon.admin') || '';
+  let toastTimer; const toast = (m) => { const t = $('toast'); t.textContent = m; t.classList.add('on'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), 3500); };
+
+  async function api(path, opts) {
+    const o = { method: 'GET', headers: { authorization: 'Bearer ' + token }, ...opts };
+    if (o.body !== undefined) { o.body = JSON.stringify(o.body); o.headers['content-type'] = 'application/json'; }
+    const r = await fetch(path, o), data = await r.json().catch(() => ({}));
+    if (!r.ok) throw Object.assign(new Error(data.error || 'Request failed'), { status: r.status });
+    return data;
+  }
+  const localToday = () => { const d = new Date(); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+  const shift = (k, n) => { const d = new Date(k + 'T00:00:00'); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
+
+  async function load() {
+    const date = $('date').value || localToday();
+    let r;
+    try { r = await api('/api/admin/bookings?date=' + date); }
+    catch (e) { if (e.status === 401) return signOut(true); toast(e.message); return; }
+    const live = r.bookings.filter((b) => b.status === 'confirmed');
+    $('sum').textContent = `${new Date(date + 'T00:00:00').toLocaleDateString(C.locale, { weekday: 'long', day: 'numeric', month: 'long' })} · ${live.length} booking${live.length === 1 ? '' : 's'} · $${live.reduce((t, b) => t + b.total, 0)} expected`;
+    const thumb = (m) => `<a class="th" href="${esc(m.url)}" target="_blank" rel="noopener">${(m.contentType || '').startsWith('video/')
+      ? `<video src="${esc(m.url)}#t=0.5" muted playsinline preload="metadata"></video><span class="play">▶</span>` : `<img src="${esc(m.url)}" alt="" loading="lazy">`}</a>`;
+    const media = (b) => {
+      const rows = [['beforeMedia', 'Before'], ['afterMedia', 'After']].filter(([k]) => (b[k] || []).length)
+        .map(([k, label]) => `<div><small>${label}</small><div class="thumbs sm">${b[k].map(thumb).join('')}</div></div>`);
+      const add = b.status === 'confirmed' ? `<div><small>Add after photo or video</small><div class="thumbs sm"><label class="th add" data-busy=""><input type="file" accept="image/*,video/*" multiple data-after="${esc(b.ref)}"><span>+</span></label></div></div>` : '';
+      return rows.length || add ? `<div class="media-row extra">${rows.join('')}${add}</div>` : '';
+    };
+    const look = (b) => b.lookRequest || b.aiAdvice ? `<div class="look extra">${b.lookRequest ? `<b>Wants:</b> ${esc(b.lookRequest)}<br>` : ''}${b.aiAdvice ? `<b>Chosen look:</b> ${esc(b.aiAdvice)}` : ''}</div>` : '';
+    const items = [
+      ...r.bookings.map((b) => ({ t: b.time, html: `<div class="card ap ${b.status !== 'confirmed' ? 'off' : ''}"><div class="t">${fmt(b.time)}</div>
+        <div class="who"><b>${esc(b.name)} · ${esc(b.services.map(svc).join(' + '))}${b.status !== 'confirmed' ? '<span class="tag off">Cancelled</span>' : ''}</b>
+        <span>${esc(byId(b.barberId).name)} · ${b.mins} min · $${b.total} · <a href="tel:${esc(b.phone)}">${esc(b.phone)}</a> · ${esc(b.email)}${b.notes ? '<br>“' + esc(b.notes) + '”' : ''}<br>Ref ${esc(b.ref)}</span></div>
+        ${b.status === 'confirmed' ? `<button class="btn2 danger" type="button" data-cancel="${esc(b.ref)}" style="flex:0 0 auto;padding:0 12px">Cancel</button>` : ''}
+        ${look(b)}${media(b)}</div>` })),
+      ...r.blocks.map((k) => ({ t: k.start, html: `<div class="card ap blk"><div class="t">${fmt(k.start)}</div>
+        <div class="who"><b>Blocked · ${esc(byId(k.barberId).name)}</b><span>Until ${fmt(k.end)}${k.reason ? ' · ' + esc(k.reason) : ''}</span></div>
+        <button class="btn2" type="button" data-unblock="${k.id}" style="flex:0 0 auto;padding:0 12px">Remove</button></div>` })),
+    ].sort((a, b) => a.t - b.t);
+    $('list').innerHTML = items.length ? items.map((i) => i.html).join('') : '<p class="empty">Nothing on this day.</p>';
+  }
+  function signIn() {
+    token = $('tok').value.trim(); if (!token) return;
+    sessionStorage.setItem('salon.admin', token);
+    $('login').hidden = true; $('panel').hidden = false; $('logout').hidden = false; $('e-tok').classList.remove('on');
+    load();
+  }
+  function signOut(rejected) {
+    token = ''; sessionStorage.removeItem('salon.admin');
+    $('login').hidden = false; $('panel').hidden = true; $('logout').hidden = true;
+    $('e-tok').classList.toggle('on', !!rejected);
+  }
+
+  $('date').value = localToday();
+  $('b-who').innerHTML = C.barbers.filter((b) => !b.any).map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join('');
+  $('signin').onclick = signIn;
+  $('tok').addEventListener('keydown', (e) => { if (e.key === 'Enter') signIn(); });
+  $('logout').onclick = () => signOut(false);
+  $('reload').onclick = load;
+  $('date').onchange = load;
+  $('prev').onclick = () => { $('date').value = shift($('date').value, -1); load(); };
+  $('next').onclick = () => { $('date').value = shift($('date').value, 1); load(); };
+  $('blockform').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('/api/admin/blocks', { method: 'POST', body: { barberId: $('b-who').value, date: $('date').value, start: toHours($('b-start').value), end: toHours($('b-end').value), reason: $('b-reason').value } });
+      toast('Time blocked.'); $('blockform').reset(); load();
+    } catch (err) { toast(err.message); }
+  });
+  document.addEventListener('change', async (e) => {
+    const f = e.target.closest('input[data-after]'); if (!f || !f.files.length) return;
+    const files = [...f.files], ref = f.dataset.after; f.value = '';
+    const label = f.closest('.th'); label.classList.add('busy');
+    try {
+      const ids = [];
+      for (const file of files) {
+        const limit = (file.type.startsWith('video/') ? C.media.maxVideoMB : C.media.maxImageMB) * 1048576;
+        if (file.size > limit) throw new Error(`${file.name} is over the ${limit / 1048576} MB limit`);
+        const r = await fetch('/api/uploads?kind=after', { method: 'POST', headers: { 'content-type': file.type }, body: file });
+        const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || 'Upload failed');
+        ids.push(d.id);
+      }
+      await api('/api/bookings/' + ref + '/media', { method: 'POST', body: { kind: 'after', ids } });
+      toast('Added.'); load();
+    } catch (err) { toast(err.message); label.classList.remove('busy'); }
+  });
+  document.addEventListener('click', async (e) => {
+    const el = e.target.closest('[data-cancel],[data-unblock]'); if (!el) return;
+    try {
+      if (el.dataset.cancel) { if (!confirm('Cancel this booking?')) return; await api('/api/bookings/' + el.dataset.cancel, { method: 'DELETE' }); toast('Cancelled.'); }
+      else await api('/api/admin/blocks/' + el.dataset.unblock, { method: 'DELETE' });
+      load();
+    } catch (err) { toast(err.message); }
+  });
+  if (token) signIn.call(null, $('tok').value = token);
+})();
+</script>
+</body>
+</html>

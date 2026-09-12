@@ -55,7 +55,27 @@
   <div class="pad" id="home-cards"></div>
   <p class="lbl pad">The shop</p>
   <div class="gallery" id="gallery"></div>
+  <div id="ba-wrap" hidden>
+    <p class="lbl pad">Before and after <span class="hint">drag to compare</span></p>
+    <div class="ba" id="ba"></div>
+  </div>
   <div class="pad foot" id="home-foot"></div>
+</section>
+
+<section class="screen" id="s-look" aria-labelledby="h-look">
+  <div class="nav"><button class="back" type="button" data-go="home" aria-label="Back">←</button>
+    <div><p>AI look advisor</p><strong id="h-look" tabindex="-1">Find your look</strong></div></div>
+  <div class="pad">
+    <div class="card">
+      <p class="lbl first">Your hair right now</p>
+      <div data-uploader="before" data-kind="before"></div>
+      <p class="note">Front, side and back photos work best. Or a short video walking around your head: we'll pull a few frames from it for the barber.</p>
+    </div>
+    <label for="look-desc">Describe the look you want <span class="opt">optional</span></label>
+    <textarea id="look-desc" rows="3" maxlength="400" placeholder="e.g. Low skin fade, keep some length on top I can push back. Beard tidy but full."></textarea>
+    <p class="note" id="look-privacy"></p>
+    <div id="look-result"></div>
+  </div>
 </section>
 
 <section class="screen" id="s-barber" aria-labelledby="h-barber">
@@ -95,6 +115,11 @@
           <p class="err" id="e-em">Enter a valid email</p></div>
         <div class="wide"><label for="nt">Anything we should know? <span class="opt">optional</span></label>
           <textarea id="nt" name="notes" rows="2" maxlength="240" placeholder="Reference photo, allergies, running late…"></textarea></div>
+      </div>
+      <div class="card" id="details-photos">
+        <p class="lbl first">Photo of your hair now <span class="opt">optional</span></p>
+        <div data-uploader="before" data-kind="before"></div>
+        <p class="note">Helps your barber plan the cut. Photos or a short video around your head.</p>
       </div>
       <!-- PAYMENT: mount Stripe Elements here if you take a card hold. Hidden until then. -->
       <div id="card-mount" hidden></div>
