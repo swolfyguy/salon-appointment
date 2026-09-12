@@ -1,0 +1,52 @@
+# Deploys to Cloudflare on every push to main.
+# Needs two repository secrets (Settings > Secrets and variables > Actions):
+#   CLOUDFLARE_API_TOKEN   a token with the "Edit Cloudflare Workers" template plus D1 and R2 edit
+#   CLOUDFLARE_ACCOUNT_ID  from the Cloudflare dashboard sidebar
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: node --check worker/index.js && node --check assets/js/app.js && node --check assets/js/config.js
+
+      - name: Build static files
+        run: npm run build
+
+      - name: Apply database migrations
+        # Safe to re-run: the schema uses IF NOT EXISTS. Skips if the database id is still the placeholder.
+        run: |
+          if grep -q "00000000-0000-0000-0000-000000000000" wrangler.jsonc; then
+            echo "wrangler.jsonc still has the placeholder database_id; skipping schema step"
+          else
+            npx wrangler d1 execute salon-appointment --remote --file=worker/schema.sql
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy

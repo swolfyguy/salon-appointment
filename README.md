@@ -79,6 +79,21 @@ One-time setup, run from this folder:
    npm run deploy
    ```
 
+### Automatic deploys from GitHub
+
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) deploys on every
+push to `main`. It needs two repository secrets, set under Settings, Secrets
+and variables, Actions:
+
+- `CLOUDFLARE_ACCOUNT_ID`: shown in the Cloudflare dashboard sidebar.
+- `CLOUDFLARE_API_TOKEN`: create one at dash.cloudflare.com/profile/api-tokens
+  from the "Edit Cloudflare Workers" template, then add D1 Edit and R2 Edit
+  permissions.
+
+The one-time steps above (create the database, bucket and secrets, paste the
+database id) still happen once from your machine. After that, pushing is
+deploying. The workflow re-applies the schema each run, which is harmless.
+
 If you deployed before photos and the advisor were added, run the migration
 once instead of `db:init`:
 `npx wrangler d1 execute salon-appointment --remote --file=worker/migrations/002_media_ai.sql`
