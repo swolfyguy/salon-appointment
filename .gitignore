@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.idea/
+.claude/
+.wrangler/
+.DS_Store

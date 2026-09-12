@@ -1,0 +1,12 @@
+{
+  "name": "salon-appointment",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static booking page for a barbershop, deployed to Cloudflare Workers static assets.",
+  "scripts": {
+    "start": "npx --yes serve -l 5173 .",
+    "build": "node scripts/build.mjs",
+    "deploy": "npm run build && npx --yes wrangler@latest deploy",
+    "preview": "npm run build && npx --yes wrangler@latest dev"
+  }
+}

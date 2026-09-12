@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Faded Lines Bentleigh — Book a chair</title>
+<meta name="description" content="Book a skin fade, classic cut, beard trim or hot towel shave at Faded Lines, 271 Centre Rd Bentleigh. Pick your barber and a time in under a minute.">
+<meta name="theme-color" content="#0B0A09">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Faded Lines Bentleigh — Book a chair">
+<meta property="og:description" content="Fades, classic cuts and beard work on Centre Road. Pick your barber and a time in under a minute.">
+<meta property="og:image" content="https://images.unsplash.com/photo-1585747860715-2ba37e788b70?auto=format&fit=crop&w=1200&h=630&q=70">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://images.unsplash.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body>
+<div id="app">
+<div id="bar" aria-hidden="true"><div id="fill"></div></div>
+
+<aside id="rail">
+  <img id="rail-bg" alt="" aria-hidden="true">
+  <div class="rail-in">
+    <div>
+      <p class="mark" id="rail-name"></p>
+      <p class="rail-sub" id="rail-blurb"></p>
+    </div>
+    <div class="rail-live" id="live"></div>
+    <div class="rail-foot" id="rail-foot"></div>
+  </div>
+</aside>
+
+<main id="stage">
+
+<section class="screen on" id="s-home" aria-labelledby="h-home">
+  <div class="hero">
+    <img class="hero-img" id="hero-img" alt="">
+    <div class="hero-in">
+      <span class="pill" id="pill-m"></span>
+      <h1 id="h-home" tabindex="-1"></h1>
+      <p id="hero-blurb"></p>
+    </div>
+  </div>
+  <div class="dhead">
+    <span class="pill" id="pill-d"></span>
+    <h1>Book a chair.</h1>
+    <p>Four steps, about a minute. Nothing to pay until you're in the chair.</p>
+  </div>
+  <div class="strip" id="strip"></div>
+  <div class="pad" id="home-cards"></div>
+  <p class="lbl pad">The shop</p>
+  <div class="gallery" id="gallery"></div>
+  <div class="pad foot" id="home-foot"></div>
+</section>
+
+<section class="screen" id="s-barber" aria-labelledby="h-barber">
+  <div class="nav"><button class="back" type="button" data-go="home" aria-label="Back">←</button>
+    <div><p>Step 1 of 4</p><strong id="h-barber" tabindex="-1">Pick your barber</strong></div></div>
+  <div class="pad" id="barbers"></div>
+</section>
+
+<section class="screen" id="s-services" aria-labelledby="h-services">
+  <div class="nav"><button class="back" type="button" data-go="barber" aria-label="Back">←</button>
+    <div><p>Step 2 of 4</p><strong id="h-services" tabindex="-1">Choose services</strong></div></div>
+  <div class="pad" id="services"></div>
+</section>
+
+<section class="screen" id="s-time" aria-labelledby="h-time">
+  <div class="nav"><button class="back" type="button" id="time-back" data-go="services" aria-label="Back">←</button>
+    <div><p id="time-step">Step 3 of 4</p><strong id="h-time" tabindex="-1">Pick a time</strong></div></div>
+  <div class="dates" id="dates" role="tablist" aria-label="Date"></div>
+  <div class="pad" id="times"></div>
+</section>
+
+<section class="screen" id="s-details" aria-labelledby="h-details">
+  <div class="nav"><button class="back" type="button" data-go="time" aria-label="Back">←</button>
+    <div><p>Step 4 of 4</p><strong id="h-details" tabindex="-1">Your details</strong></div></div>
+  <div class="pad">
+    <div class="card" id="receipt"></div>
+    <form id="form" novalidate>
+      <div class="fields">
+        <div><label for="nm">First name</label>
+          <input id="nm" name="name" autocomplete="given-name" placeholder="Alex" required>
+          <p class="err" id="e-nm">Enter your first name</p></div>
+        <div><label for="ph">Mobile</label>
+          <input id="ph" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="0412 345 678" required>
+          <p class="err" id="e-ph">Enter a valid Australian mobile</p></div>
+        <div class="wide"><label for="em">Email</label>
+          <input id="em" name="email" type="email" inputmode="email" autocomplete="email" placeholder="alex@example.com" required>
+          <p class="err" id="e-em">Enter a valid email</p></div>
+        <div class="wide"><label for="nt">Anything we should know? <span class="opt">optional</span></label>
+          <textarea id="nt" name="notes" rows="2" maxlength="240" placeholder="Reference photo, allergies, running late…"></textarea></div>
+      </div>
+      <!-- PAYMENT: mount Stripe Elements here if you take a card hold. Hidden until then. -->
+      <div id="card-mount" hidden></div>
+      <p class="note" id="pay-note"></p>
+    </form>
+  </div>
+</section>
+
+<section class="screen" id="s-done" aria-labelledby="h-done">
+  <div class="done">
+    <div class="seal">✓</div>
+    <h2 id="h-done" tabindex="-1">Chair's yours</h2>
+    <p id="doneline"></p>
+  </div>
+  <div class="pad" id="done-body"></div>
+</section>
+
+<section class="screen" id="s-bookings" aria-labelledby="h-bookings">
+  <div class="nav"><button class="back" type="button" data-go="home" aria-label="Back">←</button>
+    <div><p>Saved on this device</p><strong id="h-bookings" tabindex="-1">My bookings</strong></div></div>
+  <div class="pad" id="bookings"></div>
+</section>
+
+<div class="bar" id="cta"></div>
+</main>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<noscript><div class="noscript">This booking page needs JavaScript. Call us instead: <a href="tel:+61395570000">(03) 9557 0000</a>.</div></noscript>
+
+<script src="assets/js/config.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

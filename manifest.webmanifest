@@ -1,0 +1,10 @@
+{
+  "name": "Faded Lines Bentleigh",
+  "short_name": "Faded Lines",
+  "description": "Book a chair at Faded Lines, Bentleigh.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0B0A09",
+  "theme_color": "#0B0A09",
+  "icons": [{ "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
