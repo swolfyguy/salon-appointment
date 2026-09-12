@@ -82,17 +82,23 @@ One-time setup, run from this folder:
 ### Automatic deploys from GitHub
 
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) deploys on every
-push to `main`. It needs two repository secrets, set under Settings, Secrets
-and variables, Actions:
+push to `main` and does all the setup itself: it creates the D1 database and
+R2 bucket if they don't exist, fills in the database id, applies the schema,
+deploys, and pushes any Worker secrets you've stored in GitHub. None of the
+manual steps above are needed when you use it.
 
-- `CLOUDFLARE_ACCOUNT_ID`: shown in the Cloudflare dashboard sidebar.
-- `CLOUDFLARE_API_TOKEN`: create one at dash.cloudflare.com/profile/api-tokens
-  from the "Edit Cloudflare Workers" template, then add D1 Edit and R2 Edit
-  permissions.
+Repository secrets, under Settings, Secrets and variables, Actions:
 
-The one-time steps above (create the database, bucket and secrets, paste the
-database id) still happen once from your machine. After that, pushing is
-deploying. The workflow re-applies the schema each run, which is harmless.
+| Secret | Required | What it is |
+| --- | --- | --- |
+| `CLOUDFLARE_ACCOUNT_ID` | yes | Shown in the Cloudflare dashboard sidebar |
+| `CLOUDFLARE_API_TOKEN` | yes | Create at dash.cloudflare.com/profile/api-tokens with the "Edit Cloudflare Workers" template, then add **D1: Edit** and **Workers R2 Storage: Edit** |
+| `ADMIN_TOKEN` | no | Owner password for `/admin` |
+| `ANTHROPIC_API_KEY` | no | Turns on the AI look advisor |
+| `NOTIFY_WEBHOOK` | no | URL that receives booking events |
+
+The API token needs those three permissions. With only the Workers template,
+the database and bucket steps fail with a permissions error.
 
 If you deployed before photos and the advisor were added, run the migration
 once instead of `db:init`:
