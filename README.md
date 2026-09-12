@@ -22,6 +22,22 @@ A barbershop booking site that runs entirely on Cloudflare's free tier.
 If the API is unreachable, or `api: false` is set in the config, the page runs
 in demo mode: availability is simulated and bookings stay in the browser.
 
+### Showcase mode (current setup)
+
+Bookings, availability, and the owner page are fully real. Two features run in
+a pretend mode until you switch them on, so the flow can be shown to a client
+at zero cost:
+
+- **Photos and video** preview in the browser and are not stored. A small note
+  under the uploader says so. To store them for real, enable R2 in the
+  Cloudflare dashboard (it asks for a payment method, the free tier is 10 GB),
+  uncomment the `r2_buckets` block in `wrangler.jsonc`, and push. The workflow
+  creates the bucket.
+- **The AI look advisor** returns sample suggestions after a short pause,
+  marked as samples on screen. Add an `ANTHROPIC_API_KEY` secret in GitHub and
+  push to get real analysis of the customer's photos. Set `ai.demo` to `false`
+  in the config if you'd rather the button show "not set up yet" than samples.
+
 ## Run locally
 
 Requires Node 18 or newer.

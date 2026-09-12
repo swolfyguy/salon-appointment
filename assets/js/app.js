@@ -238,12 +238,15 @@
   function drawUploader(key) {
     document.querySelectorAll(`[data-uploader="${key}"]`).forEach((el) => {
       if (!online) { el.innerHTML = `<p class="note">Photo upload needs the live booking service, which is unavailable right now.</p>`; return; }
-      const u = up(key), attached = key.includes(':');
+      const u = up(key), attached = key.includes(':') && FEATURES.media;
       el.innerHTML = `<div class="thumbs">${u.items.map((m, i) => thumb(m, attached ? '' : `${key}:${i}`)).join('')}
         <label class="th add ${u.busy ? 'busy' : ''}"><input type="file" accept="image/*,video/*" multiple hidden data-files="${esc(key)}" ${u.busy ? 'disabled' : ''}>
-          <span>${u.busy ? '<span class="spin"></span>Uploading' : '+ Photo or video'}</span></label></div>`;
+          <span>${u.busy ? '<span class="spin"></span>' + (FEATURES.media ? 'Uploading' : 'Adding') : '+ Photo or video'}</span></label></div>
+        ${FEATURES.media ? '' : '<p class="note muted" style="margin-top:6px">Preview only in this demo: photos stay on your device.</p>'}`;
     });
   }
+  /* Storage off: keep the file in the browser and show it, nothing is sent. */
+  const localItem = (blob, fromVideo) => ({ id: null, local: true, fromVideo: !!fromVideo, url: URL.createObjectURL(blob), contentType: blob.type });
   async function shrinkImage(file) {
     let bmp;
     try { bmp = await createImageBitmap(file); } catch (e) { throw new Error("That image format isn't supported here. Try a JPG or PNG."); }
@@ -279,16 +282,16 @@
     u.busy = true; drawUploader(key);
     try {
       for (const f of files) {
-        const added = [];
+        const added = [], send = FEATURES.media ? (b) => uploadBlob(b, kind) : (b, v) => localItem(b, v);
         if (f.type.startsWith('video/')) {
           if (f.size > C.media.maxVideoMB * 1048576) throw new Error(`Videos must be under ${C.media.maxVideoMB} MB`);
-          for (const b of await videoFrames(f, 4)) added.push({ ...(await uploadBlob(b, kind)), fromVideo: true });
-          added.push(await uploadBlob(f, kind));
+          for (const b of await videoFrames(f, 4)) added.push({ ...(await send(b, true)), fromVideo: true });
+          added.push(await send(f));
         } else if (f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name)) {
-          added.push(await uploadBlob(await shrinkImage(f), kind));
+          added.push(await send(await shrinkImage(f)));
         } else throw new Error('Choose a photo or a video.');
         u.items.push(...added);
-        if (ref) {   // existing booking: attach straight away
+        if (ref && FEATURES.media) {   // existing booking: attach straight away
           const r = await api(`/api/bookings/${encodeURIComponent(ref)}/media`, { method: 'POST', body: { kind, ids: added.map((m) => m.id) } });
           remember(r.booking);
         }
@@ -307,20 +310,22 @@
     if (LOOK) drawAdvice(); else if (!online) $('look-result').innerHTML = `<p class="empty">The advisor needs the live booking service, which is unavailable right now.</p>`;
   }
   async function getAdvice() {
-    const photos = up('before').items.filter((m) => !isVideo(m)).map((m) => m.id).slice(0, C.ai.maxPhotos);
-    const description = $('look-desc').value.trim();
+    let description = $('look-desc').value.trim();
+    const items = up('before').items.filter((m) => !isVideo(m)), photos = items.map((m) => m.id).filter(Boolean).slice(0, C.ai.maxPhotos);
+    if (items.length && !photos.length && description.length < 10) description = 'Suggest what suits my hair.';   // demo storage: photos never leave the device
     if (!photos.length && description.length < 10) { toast('Add a photo of your hair, or describe the look you want.'); return; }
     busyButton(true, 'Looking at your hair…');
     $('look-result').innerHTML = `<p class="empty"><span class="spin"></span>Working out what suits you. This takes about half a minute.</p>`;
     try {
       const r = await api('/api/advice', { method: 'POST', body: { photoIds: photos, description } });
-      LOOK = { ...r.advice, description }; drawAdvice();
+      LOOK = { ...r.advice, description: $('look-desc').value.trim(), demo: !!r.demo }; drawAdvice();
     } catch (e) { $('look-result').innerHTML = ''; toast(e.message, 6000); }
     busyButton(false, 'Get suggestions');
   }
   function drawAdvice() {
     const a = LOOK;
-    $('look-result').innerHTML = `<div class="card"><p class="eyebrow">What we see</p><p class="advice">${esc(a.analysis)}</p></div>
+    $('look-result').innerHTML = `${a.demo ? `<p class="note muted">Sample suggestions for demonstration. Live analysis of your photos switches on when the shop connects its AI key.</p>` : ''}
+      <div class="card"><p class="eyebrow">What we see</p><p class="advice">${esc(a.analysis)}</p></div>
       <p class="lbl">Looks that would suit you</p>
       ${a.suggestions.map((s, i) => {
         const svcs = s.serviceIds.map(svcById).filter(Boolean), bs = s.barberIds.map(barberById).filter((b) => b && !b.any);
@@ -417,7 +422,7 @@
   const draft = () => ({
     barberId: S.barber.any && !online ? assign(S.date, S.time, mins() / 60).id : S.barber.id,
     requestedAny: !!S.barber.any, services: S.svc.map((s) => s.id), date: S.date, time: S.time, mins: mins(), total: total(),
-    beforeMedia: up('before').items.map((m) => m.id),
+    beforeMedia: up('before').items.map((m) => m.id).filter(Boolean),
     lookRequest: S.look ? S.look.description : '', aiAdvice: S.look ? S.look.advice : '',
   });
   function priced(b) { const who = barberById(b.barberId); b.total = b.services.reduce((t, id) => t + price(svcById(id), who), 0); return b; }
@@ -538,7 +543,7 @@
     const card = (b, past) => {
       const who = barberById(b.barberId), live = b.status === 'confirmed';
       const key = `${started(b) ? 'after' : 'before'}:${b.ref}`;
-      if (live && online) { const u = up(key); u.items = b[started(b) ? 'afterMedia' : 'beforeMedia'] || []; }
+      if (live && online) { const u = up(key); if (!u.items.some((m) => m.local)) u.items = b[started(b) ? 'afterMedia' : 'beforeMedia'] || []; }
       return `<div class="card bk ${past ? 'past' : ''}"><div class="when">${esc(shortDate(b.date))}, ${fmt(b.time)}${b.status === 'cancelled' ? '<span class="tag off">Cancelled</span>' : past ? '<span class="tag">Past</span>' : ''}</div>
         <div class="meta">${esc(b.services.map((id) => (svcById(id) || {}).name).filter(Boolean).join(' + '))} with ${esc(who ? who.name : '')} · $${b.total} · ${b.mins} min<br>Ref ${esc(b.ref)}</div>
         ${live && started(b) && (b.beforeMedia || []).length ? `<div class="media-row"><div><small>Before</small><div class="thumbs sm">${b.beforeMedia.map((m) => thumb(m)).join('')}</div></div></div>` : ''}
